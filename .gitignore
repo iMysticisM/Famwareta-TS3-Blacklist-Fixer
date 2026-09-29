@@ -1,0 +1,8 @@
+# Build artifacts
+build/
+*.spec
+__pycache__/
+*.pyc
+
+# Keep dist for users who want to grab the compiled exe directly or track releases
+# (or if they prefer to put it in GitHub Releases)
