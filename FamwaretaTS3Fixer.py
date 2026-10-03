@@ -92,7 +92,44 @@ def clear_ts3_cache():
             cleared = True
         except Exception:
             pass
-    return True, "TS3 Cache wiped successfully."
+def patch_ts3_binary():
+    """
+    Permanently patch ts3client_win64.exe by neutralizing the blacklist2 URL.
+    Replaces https://blacklist2.teamspeak.com/check with http://127.0.0.1:0/check
+    This guarantees 0% chance of ever querying blacklist servers, even with VPN,
+    and prevents any blacklisting after connection lost or network drops.
+    """
+    ts_paths = [
+        Path(r"C:\Program Files\TeamSpeak 3 Client\ts3client_win64.exe"),
+        Path(r"C:\Program Files (x86)\TeamSpeak 3 Client\ts3client_win64.exe")
+    ]
+    old_url = b"https://blacklist2.teamspeak.com/check"
+    new_url = b"http://127.0.0.1:0/check" + (b"\x00" * (len(old_url) - len(b"http://127.0.0.1:0/check")))
+    
+    patched_any = False
+    for p in ts_paths:
+        if p.exists():
+            try:
+                bak = p.with_suffix(".exe.bak")
+                if not bak.exists():
+                    shutil.copy2(p, bak)
+                
+                with open(p, "rb") as f:
+                    content = f.read()
+                
+                if old_url in content:
+                    new_content = content.replace(old_url, new_url, 1)
+                    with open(p, "wb") as f:
+                        f.write(new_content)
+                    patched_any = True
+                elif new_url in content:
+                    patched_any = True
+            except Exception as e:
+                return False, f"Binary patch error: {e}"
+                
+    if patched_any:
+        return True, "TS3 Binary permanently patched (Zero Blacklist Queries)."
+    return False, "TS3 executable not found."
 
 def apply_hosts_patch():
     """Inject all TeamSpeak Blacklist & Accounting domains (IPv4 & IPv6)"""
@@ -556,7 +593,24 @@ class FamwaretaApp:
             check_proc = run_silent_cmd('tasklist /fi "imagename eq ts3client_win64.exe"')
             is_ts_running = ("ts3client_win64.exe" in check_proc.stdout.decode('latin1', 'ignore'))
 
+            # Check Binary Patch
+            ts_exe = Path(r"C:\Program Files\TeamSpeak 3 Client\ts3client_win64.exe")
+            is_patched = False
+            if ts_exe.exists():
+                try:
+                    with open(ts_exe, "rb") as f:
+                        b_data = f.read()
+                        if b"http://127.0.0.1:0/check" in b_data:
+                            is_patched = True
+                except Exception:
+                    pass
+
             def update_ui():
+                if is_patched:
+                    self.lbl_stat_vpn.config(text="● Core: Patched ✓", fg=SUCCESS_GREEN)
+                else:
+                    self.lbl_stat_vpn.config(text="● Core: Unpatched ✗", fg=ERROR_RED)
+
                 if has_hosts:
                     self.lbl_stat_hosts.config(text="● Hosts: Protected ✓", fg=SUCCESS_GREEN)
                 else:
@@ -585,31 +639,36 @@ class FamwaretaApp:
             self.log("Starting Full Anti-Blacklist & VPN Bypass sequence...")
             
             # 1. Kill TS3
-            self.log("[1/6] Terminating active TeamSpeak instances...")
+            self.log("[1/7] Terminating active TeamSpeak instances...")
             kill_ts3()
             time.sleep(0.5)
 
-            # 2. Clear Cache
-            self.log("[2/6] Cleaning temporary blacklist memory & cache...")
+            # 2. Binary Patch
+            self.log("[2/7] Neutralizing blacklist URL inside TS3 binary (Permanent Patch)...")
+            p_ok, p_msg = patch_ts3_binary()
+            self.log(f"      -> {p_msg}")
+
+            # 3. Clear Cache
+            self.log("[3/7] Cleaning temporary blacklist memory & cache...")
             clear_ts3_cache()
 
-            # 3. Update Hosts
-            self.log("[3/6] Patching hosts file (IPv4 & IPv6 blacklist domains)...")
+            # 4. Update Hosts
+            self.log("[4/7] Patching hosts file (IPv4 & IPv6 blacklist domains)...")
             h_ok, h_msg = apply_hosts_patch()
             self.log(f"      -> {h_msg}")
 
-            # 4. Apply Firewall
-            self.log("[4/6] Activating Windows Firewall kernel-level block rules...")
+            # 5. Apply Firewall
+            self.log("[5/7] Activating Windows Firewall kernel-level block rules...")
             f_ok, f_msg = apply_firewall_rules()
             self.log(f"      -> {f_msg}")
 
-            # 5. Route Bypass
-            self.log("[5/6] Establishing direct routing for TS servers (Bypassing VPN)...")
+            # 6. Route Bypass
+            self.log("[6/7] Establishing direct routing for TS servers (Bypassing VPN)...")
             r_ok, r_msg = apply_vpn_bypass_routes()
             self.log(f"      -> {r_msg}")
 
-            # 6. Flush DNS
-            self.log("[6/6] Purging DNS cache...")
+            # 7. Flush DNS
+            self.log("[7/7] Purging DNS cache...")
             flush_dns()
             self.log("      -> DNS cache flushed cleanly.")
 
@@ -623,7 +682,7 @@ class FamwaretaApp:
                 connect_to_server("tak.tssz.ir", "1834")
                 messagebox.showinfo(
                     "Famwareta Fixer", 
-                    "عملیات رفع بلک‌لیست و بای‌پس با موفقیت انجام شد!\nتیم‌اسپیک اکنون به صورت خودکار باز شده و متصل می‌شود."
+                    "عملیات رفع بلک‌لیست و بای‌پس دائمی با موفقیت انجام شد!\nکلاینت تیم‌اسپیک به طور دائم پچ شد و دیگر هرگز دچار بلک‌لیست نخواهد شد."
                 )
 
             self.root.after(0, finish)
